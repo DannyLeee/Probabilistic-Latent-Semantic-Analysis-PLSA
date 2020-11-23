@@ -7,6 +7,9 @@ from functools import reduce
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
 import random
 import pickle
+from scipy import sparse
+from scipy.sparse import csr_matrix, csc_matrix
+from numba import jit
 
 def timestamp(msg=""):
     dt1 = datetime.utcnow().replace(tzinfo=timezone.utc)
@@ -40,7 +43,7 @@ args = parser.parse_args()
 #     __setattr__ = dict.__setitem__
 #     __delattr__ = dict.__delitem__
 
-# args = dotdict(from_scratch=0, train_from=0, A=0.7, B=0.2, K=8, step=30, HW=4)
+# args = dotdict(from_scratch=1, train_from=0, A=0.7, B=0.2, K=8, step=30, HW=4)
 
 A = args.A
 B = args.B
@@ -83,35 +86,66 @@ for txt in tqdm(file_iter("d")):
 total_size = sum(doc_len)
 
 if not args.from_scratch or args.train_from != 0:
-    with open(root_path + "model/tf.pkl", "rb") as fp:
+    with open(root_path + "model/big/tf.pkl", "rb") as fp:
         list_d_tf = pickle.load(fp)
 else:
-    with open(root_path + "model/tf.pkl", "wb") as fp:
+    with open(root_path + "model/big/tf.pkl", "wb") as fp:
         pickle.dump(list_d_tf, fp)
 
 #%%
 if not args.from_scratch or args.train_from != 0:
-    with open(root_path + "model/voc.pkl", "rb") as fp:
+    with open(root_path + "model/big/new_voc.pkl", "rb") as fp:
         voc = pickle.load(fp)
 else:
     # voc
-    voc = reduce(set.union, map(set, map(dict.keys, list_q_tf))) ##### small test
+    voc = reduce(set.union, map(set, map(dict.keys, list_d_tf))) ##### small test
     voc = list(voc)
-    with open(root_path + "model/voc.pkl", "wb") as fp:
+    with open(root_path + "model/big/voc.pkl", "wb") as fp:
         pickle.dump(voc, fp)
 
+
+#%%
+def counter2arr():
+        row = []
+        col = []
+        data = []
+        for i, w_i in tqdm(enumerate(voc)):
+            for j in range(len(d_list)):
+                if list_d_tf[j][w_i] != 0:
+                    row += [i]
+                    col += [j]
+                    data += [list_d_tf[j][w_i]]
+        row = np.array(row)
+        col = np.array(col)
+        data = np.array(data)
+        tf_array = csr_matrix((data, (row, col)))
+        sparse.save_npz('model/big/tf_array.npz', tf_array)
+        del row,col,data
+        return tf_array
 #%%
 # tf array
 timestamp("counter to array")
-
 if not args.from_scratch or args.train_from != 0:
-    tf_array = np.load(root_path + "model/tf_array.npy")
+        tf_array = sparse.load_npz(root_path + "model/big/tf_array.npz")
 else:
-    tf_array = np.zeros([len(voc), len(d_list)]) # V*D tf array
-    for i, w_i in tqdm(enumerate(voc)):
-        for j in range(len(d_list)):
-            tf_array[i][j] = list_d_tf[j][w_i]
-    np.save(root_path + "model/tf_array.npy", tf_array)
+    tf_array = counter2arr()
+    #%%
+    tf_sum = []
+    for i in range(len(voc)):
+        tf_sum += [tf_array[i].sum()]
+    arg_sum = np.flip(np.argsort(tf_sum))[:10000]
+
+    #%%
+    new_voc = []
+    for i in arg_sum:
+        new_voc += [voc[i]] 
+
+    voc = new_voc
+    with open(root_path + "model/big/new_voc.pkl", "wb") as fp:
+        pickle.dump(voc, fp)
+    tf_array = counter2arr()
+
+tf_array = tf_array.toarray()
 
 #%%
 # df
@@ -119,13 +153,13 @@ timestamp("df")
 
 # if True:
 if not args.from_scratch or args.train_from != 0:
-    with open(root_path + "model/BG.pkl", "rb") as fp:
+    with open(root_path + "model/big/BG.pkl", "rb") as fp:
         BG_counter = pickle.load(fp)
 else:
     BG_counter = Counter()
     for c in tqdm(list_d_tf):
         BG_counter += c
-    with open(root_path + "model/BG.pkl", "wb") as fp:
+    with open(root_path + "model/big/BG.pkl", "wb") as fp:
         pickle.dump(BG_counter, fp)
 
 #%%
@@ -134,22 +168,50 @@ T_given_wd = np.zeros([K, len(voc), len(d_list)]) # K*i*j matrix
 if args.train_from == 0:
     # initial
     timestamp("random initial")
-    while True:
-        w_given_T = np.random.rand(len(voc), K) # i*K random distribution matrix
-        for k in range(K):
-            w_given_T[:, k] /= w_given_T[:, k].sum()
-        T_given_d = np.full([K, len(d_list)], 1/K) # K*j uniform distribution matrix
+    
+    w_given_T = np.random.rand(len(voc), K) # i*K random distribution matrix
+    for k in range(K):
+        w_given_T[:, k] /= w_given_T[:, k].sum()
+    T_given_d = np.full([K, len(d_list)], 1/K) # K*j uniform distribution matrix
 
-        if np.count_nonzero(np.isnan(T_given_wd)) + np.count_nonzero(np.isnan(w_given_T)) + np.count_nonzero(np.isnan(T_given_d)) == 0:
-            np.save(f"{root_path}model/P(w|T)_init", w_given_T)
-            np.save(f"{root_path}model/P(T|d)_init", T_given_d)
-            break
 elif args.train_from == -1:
-    w_given_T = np.load(root_path + "model/P(w|T)_init.npy")
-    T_given_d = np.load(root_path + "model/P(T|d)_init.npy")
+    w_given_T = np.load(root_path + "model/big/P(w_T)_init.npy")
+    T_given_d = np.load(root_path + "model/big/P(T_d)_init.npy")
 else:
-    w_given_T = np.load(root_path + "model/P(w|T)_" + str(args.train_from) + ".npy")
-    T_given_d = np.load(root_path + "model/P(T|d)_" + str(args.train_from) + ".npy")
+    w_given_T = np.load(root_path + "model/big/P(w_T)_" + str(args.train_from) + ".npy")
+    T_given_d = np.load(root_path + "model/big/P(T_d)_" + str(args.train_from) + ".npy")
+
+#%%
+@jit(nopython=True)
+def E_step(T_given_wd, w_given_T, T_given_d, V, D, K):
+    denominator = np.dot(w_given_T, T_given_d)
+    for i in range(V):
+        for j in range(D):
+            if denominator[i][j] == 0:
+                T_given_wd[:, i, j] = 0
+            else:
+                for k in range(K):
+                    T_given_wd[k][i][j] = w_given_T[i][k]*T_given_d[k][j] / denominator[i][j]
+    return T_given_wd
+#%%
+@jit(nopython=True)
+def M_step(tf_array, T_given_wd, w_given_T, T_given_d, V, D, K, doc_len):
+    for k in range(K):
+        # P(w|T)
+        tf_wd = tf_array*T_given_wd[k]
+        denominator = tf_wd.sum()
+        for i in range(V):
+            w_given_T[i][k] = (tf_array[i]*T_given_wd[k][i]).sum()
+        w_given_T[:, k] /= denominator
+        
+        # P(T|d)
+        for j in range(D):
+            T_given_d[k][j] = tf_wd[:, j].sum() / doc_len[j]
+            if T_given_d[:, j].sum() == 0: # whole doc are OOV
+                T_given_d[:, j] = 1 / K
+            else:
+                T_given_d[:, j] /= T_given_d[:, j].sum() # standardization
+    return w_given_T, T_given_d
 
 #%%
 loss = 0.0
@@ -157,34 +219,13 @@ for step in tqdm(range(args.train_from, args.step)):
     # E-step
     timestamp(f"\n{step+1}\t--E-step--")
     timestamp("P(T|w,d)")
-    denominator = np.matmul(w_given_T, T_given_d)
-    for i in range(len(voc)):
-        for j in range(len(d_list)):
-            if denominator[i][j] == 0:
-                T_given_wd[:, i, j] = 0
-            else:
-                for k in range(K):
-                    T_given_wd[k][i][j] = w_given_T[i][k]*T_given_d[k][j] / denominator[i][j]
+    E_step(T_given_wd, w_given_T, T_given_d, len(voc), len(d_list), K)
 
     #%%
     # M-step
     timestamp("--M-step--")
     timestamp("P(w|T) & P(T|d)")
-    for k in range(K):
-        # P(w|T)
-        tf_wd = tf_array*T_given_wd[k]
-        denominator = tf_wd.sum()
-        for i in range(len(voc)):
-            w_given_T[i][k] = (tf_array[i]*T_given_wd[k][i]).sum()
-        w_given_T[:, k] /= denominator
-        
-        # P(T|d)
-        for j in range(len(d_list)):
-            T_given_d[k][j] = tf_wd[:, j].sum() / doc_len[j]
-            if T_given_d[:, j].sum() == 0: # whole doc are OOV
-                T_given_d[:, j] = 1 / K
-            else:
-                T_given_d[:, j] /= T_given_d[:, j].sum() # standardization
+    w_given_T, T_given_d = M_step(tf_array, T_given_wd, w_given_T, T_given_d, len(voc), len(d_list), K, doc_len)
     timestamp("---")
 
     #%%
@@ -195,9 +236,12 @@ for step in tqdm(range(args.train_from, args.step)):
     loss = (tf_array*w_given_d).sum()
     timestamp(f"step_{step+1}\tLoss: {loss:.2f}")
 
-    np.save(f"{root_path}model/P(T|w,d)_{step+1}", T_given_wd) 
-    np.save(f"{root_path}model/P(w|T)_{step+1}", w_given_T)
-    np.save(f"{root_path}model/P(T|d)_{step+1}", T_given_d)
+    if step+1 % 5 == 0:
+        np.save(f"{root_path}model/big/P(T_w,d)_{step+1}", T_given_wd)
+        np.save(f"{root_path}model/big/P(w_T)_{step+1}", w_given_T)
+        # sparse.save_npz(f"{root_path}model/big/P(T_w,d)_{step+1}", T_given_wd)
+        # sparse.save_npz(f"{root_path}model/big/P(w_T)_{step+1}", w_given_T)
+        np.save(f"{root_path}model/big/P(T_d)_{step+1}", T_given_d)
 
 #%%
 # score for each qd-pair
