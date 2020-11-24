@@ -79,10 +79,15 @@ for txt in tqdm(file_iter("q")):
 
 #%%
 doc_len = []
-for txt in tqdm(file_iter("d")):
-    if args.from_scratch:
+if args.from_scratch:
+    for txt in tqdm(file_iter("d")):
         list_d_tf += [Counter(txt.split())]
-    doc_len += [len(txt)]
+        doc_len += [len(txt)]
+    with open(root_path + "model/big/doc_len.pkl", "wb") as fp:
+        pickle.dump(doc_len, fp)
+else:
+    with open(root_path + "model/big/doc_len.pkl", "rb") as fp:
+        doc_len = pickle.load(fp)
 total_size = sum(doc_len)
 
 if not args.from_scratch or args.train_from != 0:
@@ -139,7 +144,12 @@ else:
     new_voc = []
     for i in arg_sum:
         new_voc += [voc[i]] 
-
+    
+    with open("model/query/voc.pkl", "rb") as fp:
+        q_voc = pickle.load(fp)
+        for q in q_voc:
+            if q not in new_voc:
+                new_voc += [q]
     voc = new_voc
     with open(root_path + "model/big/new_voc.pkl", "wb") as fp:
         pickle.dump(voc, fp)
@@ -164,7 +174,8 @@ else:
 
 #%%
 # EM
-T_given_wd = np.zeros([K, len(voc), len(d_list)]) # K*i*j matrix
+if args.train_from != args.step:
+    T_given_wd = np.zeros([K, len(voc), len(d_list)]) # K*i*j matrix
 if args.train_from == 0:
     # initial
     timestamp("random initial")
@@ -181,17 +192,22 @@ else:
     w_given_T = np.load(root_path + "model/big/P(w_T)_" + str(args.train_from) + ".npy")
     T_given_d = np.load(root_path + "model/big/P(T_d)_" + str(args.train_from) + ".npy")
 
+if args.step != args.train_from:
+    print("T|w,d", T_given_wd.shape)
+print("w|T", w_given_T.shape)
+print("T|d", T_given_d.shape)
+
 #%%
 @jit(nopython=True)
-def E_step(T_given_wd, w_given_T, T_given_d, V, D, K):
-    denominator = np.dot(w_given_T, T_given_d)
+def E_step(tf_array, T_given_wd, w_given_T, T_given_d, V, D, K):
     for i in range(V):
         for j in range(D):
-            if denominator[i][j] == 0:
+            if tf_array[i][j] == 0:
                 T_given_wd[:, i, j] = 0
             else:
+                denominator = np.dot(w_given_T[i, :], T_given_d[:, j])
                 for k in range(K):
-                    T_given_wd[k][i][j] = w_given_T[i][k]*T_given_d[k][j] / denominator[i][j]
+                    T_given_wd[k][i][j] = w_given_T[i][k]*T_given_d[k][j] / denominator
     return T_given_wd
 #%%
 @jit(nopython=True)
@@ -219,7 +235,7 @@ for step in tqdm(range(args.train_from, args.step)):
     # E-step
     timestamp(f"\n{step+1}\t--E-step--")
     timestamp("P(T|w,d)")
-    E_step(T_given_wd, w_given_T, T_given_d, len(voc), len(d_list), K)
+    E_step(tf_array, T_given_wd, w_given_T, T_given_d, len(voc), len(d_list), K)
 
     #%%
     # M-step
@@ -236,11 +252,8 @@ for step in tqdm(range(args.train_from, args.step)):
     loss = (tf_array*w_given_d).sum()
     timestamp(f"step_{step+1}\tLoss: {loss:.2f}")
 
-    if step+1 % 5 == 0:
-        np.save(f"{root_path}model/big/P(T_w,d)_{step+1}", T_given_wd)
+    if (step+1) % 5 == 0:
         np.save(f"{root_path}model/big/P(w_T)_{step+1}", w_given_T)
-        # sparse.save_npz(f"{root_path}model/big/P(T_w,d)_{step+1}", T_given_wd)
-        # sparse.save_npz(f"{root_path}model/big/P(w_T)_{step+1}", w_given_T)
         np.save(f"{root_path}model/big/P(T_d)_{step+1}", T_given_d)
 
 #%%
@@ -254,9 +267,10 @@ for q, query in tqdm(enumerate(query_list)):
             i = voc.index(w_i)
             term1 = A * (list_d_tf[j][w_i] / doc_len[j])
             term2 = 0
-            for k in range(K):
-                term2 += w_given_T[i][k] * T_given_d[k][j]
-            term2 *= B
+            if B != 0:
+                for k in range(K):
+                    term2 += w_given_T[i][k] * T_given_d[k][j]
+                term2 *= B
             term3 = (1-A-B) * (BG_counter[w_i] / total_size)
             sim_array[q][j] *= (term1 + term2 + term3)
 
