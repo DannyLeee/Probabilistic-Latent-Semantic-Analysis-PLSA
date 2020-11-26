@@ -1,14 +1,12 @@
-#%%
 import numpy as np
 from collections import Counter
 from tqdm import tqdm
 from datetime import datetime,timezone,timedelta
 from functools import reduce
 from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
-import random
 import pickle
 from scipy import sparse
-from scipy.sparse import csr_matrix, csc_matrix
+from scipy.sparse import csr_matrix
 from numba import jit
 
 def timestamp(msg=""):
@@ -26,32 +24,21 @@ def file_iter(_type):
             with open(doc_path+name+'.txt') as f:
                 yield f.readline()
 
-#%%
 parser = ArgumentParser(formatter_class=ArgumentDefaultsHelpFormatter)
 parser.add_argument("-from_scratch", type=int, default=0, help="default load computed tf, BG and voc")
-parser.add_argument("-train_from", type=int, default=0)
-parser.add_argument("-A", type=float, metavar="alpha", required=True)
-parser.add_argument("-B", type=float, metavar="beta", required=True)
-parser.add_argument("-K", type=int, required=True, help="K latent topic")
-parser.add_argument("-step", type=int, required=True, help="EM iterattion time")
-parser.add_argument("-HW", type=int, choices=[1, 4], default=4)
+parser.add_argument("-train_from", type=int, default=0, help="load the computed model to continue")
+parser.add_argument("-A", type=float, metavar="alpha", required=True, default=0.7, help=" ")
+parser.add_argument("-B", type=float, metavar="beta", required=True, default=0.2, help=" ")
+parser.add_argument("-K", type=int, required=True, help="K latent topic", default=16)
+parser.add_argument("-step", type=int, required=True, help="EM iterattion time", default=30)
 args = parser.parse_args()
-
-# class dotdict(dict):
-#     """dot.notation access to dictionary attributes"""
-#     __getattr__ = dict.get
-#     __setattr__ = dict.__setitem__
-#     __delattr__ = dict.__delitem__
-
-# args = dotdict(from_scratch=1, train_from=0, A=0.7, B=0.2, K=8, step=30, HW=4)
 
 A = args.A
 B = args.B
 K = args.K
 
-#%%
 timestamp()
-root_path = "../HW4 PLSA/" if args.HW == 4 else "../HW1 Vector Space Model/"
+root_path = "../HW4 PLSA/"
 doc_path = root_path + "data/docs/"
 query_path = root_path + "data/queries/"
 
@@ -67,7 +54,6 @@ with open(root_path + "data/query_list.txt", 'r') as q_list_file:
         line = line.replace("\n", "")
         q_list += [line]
 
-#%%
 # tf
 list_q_tf = []
 list_d_tf = []
@@ -77,7 +63,6 @@ for txt in tqdm(file_iter("q")):
     list_q_tf += [Counter(txt.split())]
     query_list += [txt]
 
-#%%
 doc_len = []
 if args.from_scratch:
     for txt in tqdm(file_iter("d")):
@@ -97,7 +82,6 @@ else:
     with open(root_path + "model/big/tf.pkl", "wb") as fp:
         pickle.dump(list_d_tf, fp)
 
-#%%
 if not args.from_scratch or args.train_from != 0:
     with open(root_path + "model/big/new_voc.pkl", "rb") as fp:
         voc = pickle.load(fp)
@@ -109,38 +93,34 @@ else:
         pickle.dump(voc, fp)
 
 
-#%%
 def counter2arr():
-        row = []
-        col = []
-        data = []
-        for i, w_i in tqdm(enumerate(voc)):
-            for j in range(len(d_list)):
-                if list_d_tf[j][w_i] != 0:
-                    row += [i]
-                    col += [j]
-                    data += [list_d_tf[j][w_i]]
-        row = np.array(row)
-        col = np.array(col)
-        data = np.array(data)
-        tf_array = csr_matrix((data, (row, col)))
-        sparse.save_npz('model/big/tf_array.npz', tf_array)
-        del row,col,data
-        return tf_array
-#%%
+    row = []
+    col = []
+    data = []
+    for i, w_i in tqdm(enumerate(voc)):
+        for j in range(len(d_list)):
+            if list_d_tf[j][w_i] != 0:
+                row += [i]
+                col += [j]
+                data += [list_d_tf[j][w_i]]
+    row = np.array(row)
+    col = np.array(col)
+    data = np.array(data)
+    tf_array = csr_matrix((data, (row, col)))
+    sparse.save_npz('model/big/tf_array.npz', tf_array)
+    del row,col,data
+    return tf_array
 # tf array
 timestamp("counter to array")
 if not args.from_scratch or args.train_from != 0:
         tf_array = sparse.load_npz(root_path + "model/big/tf_array.npz")
 else:
     tf_array = counter2arr()
-    #%%
     tf_sum = []
     for i in range(len(voc)):
         tf_sum += [tf_array[i].sum()]
     arg_sum = np.flip(np.argsort(tf_sum))[:10000]
 
-    #%%
     new_voc = []
     for i in arg_sum:
         new_voc += [voc[i]] 
@@ -157,11 +137,9 @@ else:
 
 tf_array = tf_array.toarray()
 
-#%%
 # df
 timestamp("df")
 
-# if True:
 if not args.from_scratch or args.train_from != 0:
     with open(root_path + "model/big/BG.pkl", "rb") as fp:
         BG_counter = pickle.load(fp)
@@ -172,7 +150,6 @@ else:
     with open(root_path + "model/big/BG.pkl", "wb") as fp:
         pickle.dump(BG_counter, fp)
 
-#%%
 # EM
 if args.train_from != args.step:
     T_given_wd = np.zeros([K, len(voc), len(d_list)]) # K*i*j matrix
@@ -197,7 +174,6 @@ if args.step != args.train_from:
 print("w|T", w_given_T.shape)
 print("T|d", T_given_d.shape)
 
-#%%
 @jit(nopython=True)
 def E_step(tf_array, T_given_wd, w_given_T, T_given_d, V, D, K):
     for i in range(V):
@@ -209,7 +185,6 @@ def E_step(tf_array, T_given_wd, w_given_T, T_given_d, V, D, K):
                 for k in range(K):
                     T_given_wd[k][i][j] = w_given_T[i][k]*T_given_d[k][j] / denominator
     return T_given_wd
-#%%
 @jit(nopython=True)
 def M_step(tf_array, T_given_wd, w_given_T, T_given_d, V, D, K, doc_len):
     for k in range(K):
@@ -223,13 +198,8 @@ def M_step(tf_array, T_given_wd, w_given_T, T_given_d, V, D, K, doc_len):
         # P(T|d)
         for j in range(D):
             T_given_d[k][j] = tf_wd[:, j].sum() / doc_len[j]
-            # if T_given_d[:, j].sum() == 0: # whole doc are OOV
-            #     T_given_d[:, j] = 1 / K
-            # else:
-            #     T_given_d[:, j] /= T_given_d[:, j].sum() # standardization
     return w_given_T, T_given_d
 
-#%%
 loss = 0.0
 for step in tqdm(range(args.train_from, args.step)):
     # E-step
@@ -237,14 +207,12 @@ for step in tqdm(range(args.train_from, args.step)):
     timestamp("P(T|w,d)")
     E_step(tf_array, T_given_wd, w_given_T, T_given_d, len(voc), len(d_list), K)
 
-    #%%
     # M-step
     timestamp("--M-step--")
     timestamp("P(w|T) & P(T|d)")
     w_given_T, T_given_d = M_step(tf_array, T_given_wd, w_given_T, T_given_d, len(voc), len(d_list), K, doc_len)
     timestamp("---")
 
-    #%%
     # Loss
     last_loss = loss
     loss = 0.0
@@ -259,7 +227,6 @@ for step in tqdm(range(args.train_from, args.step)):
 if args.step != args.train_from:
     del T_given_wd
 
-#%%
 # score for each qd-pair
 """P(q|d_j) = production_for_i_in_query_len[A*P(w_i|d_j) + B*(SUM_for_k_in_K(P(w_i|T_k)*P(T_k|d_j))) + (1-A-B)*P_BG(w_i)]"""
 timestamp("sim_array")
@@ -277,7 +244,6 @@ for q, query in tqdm(enumerate(query_list)):
             term3 = (1-A-B) * (BG_counter[w_i] / total_size)
             sim_array[q][j] *= (term1 + term2 + term3)
 
-#%%
 # output
 timestamp("output")
 with open('result.csv', 'w') as output_file:
@@ -285,7 +251,7 @@ with open('result.csv', 'w') as output_file:
     for i, q_id in tqdm(enumerate(q_list)):
         output_file.write(q_id+',')
         sorted = np.argsort(sim_array[i])
-        sorted = np.flip(sorted)[:1000] if args.HW == 4 else np.flip(sorted)
+        sorted = np.flip(sorted)[:1000]
         for _, j in enumerate(sorted):
             output_file.write(d_list[j]+' ')
         output_file.write('\n')
