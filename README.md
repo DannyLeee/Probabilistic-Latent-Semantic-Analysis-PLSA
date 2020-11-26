@@ -1,5 +1,5 @@
 ## Introduction
-* This is the Information Retrieval HW2
+* This is the Information Retrieval HW4
 * Using PLSA to compute the relation between given querys and documents
 
 ## Usage
