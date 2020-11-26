@@ -223,10 +223,10 @@ def M_step(tf_array, T_given_wd, w_given_T, T_given_d, V, D, K, doc_len):
         # P(T|d)
         for j in range(D):
             T_given_d[k][j] = tf_wd[:, j].sum() / doc_len[j]
-            if T_given_d[:, j].sum() == 0: # whole doc are OOV
-                T_given_d[:, j] = 1 / K
-            else:
-                T_given_d[:, j] /= T_given_d[:, j].sum() # standardization
+            # if T_given_d[:, j].sum() == 0: # whole doc are OOV
+            #     T_given_d[:, j] = 1 / K
+            # else:
+            #     T_given_d[:, j] /= T_given_d[:, j].sum() # standardization
     return w_given_T, T_given_d
 
 #%%
@@ -255,6 +255,9 @@ for step in tqdm(range(args.train_from, args.step)):
     if (step+1) % 5 == 0:
         np.save(f"{root_path}model/big/P(w_T)_{step+1}", w_given_T)
         np.save(f"{root_path}model/big/P(T_d)_{step+1}", T_given_d)
+
+if args.step != args.train_from:
+    del T_given_wd
 
 #%%
 # score for each qd-pair
